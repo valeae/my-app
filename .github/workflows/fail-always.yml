@@ -1,12 +1,12 @@
-name: Always Fail
+# name: Always Fail
 
-on:
-  pull_request:
-    types: [opened, synchronize]
+# on:
+#   pull_request:
+#     types: [opened, synchronize]
 
-jobs:
-  fail_job:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail step
-        run: exit 1
+# jobs:
+#   fail_job:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Fail step
+#         run: exit 1
