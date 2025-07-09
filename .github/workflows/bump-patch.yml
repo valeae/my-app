@@ -1,4 +1,4 @@
-name: Bump patch version on Develop and Green
+name: Bump patch version
 
 on:
   push:
@@ -6,24 +6,27 @@ on:
       - Develop
       - Green
 
+permissions:
+  contents: write  # 👈 Esto le da permiso al bot para hacer push
+
 jobs:
   bump-version:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: 20
 
       - name: Bump patch version
         run: |
-          npm version patch --no-git-tag-version
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch --no-git-tag-version
           git add package.json package-lock.json
           git commit -m "ci: bump patch version [skip ci]"
           git push
