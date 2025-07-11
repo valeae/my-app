@@ -1,32 +1,49 @@
-name: Bump patch version
+name: Auto Bump Version
 
 on:
-  push:
-    branches:
-      - Develop
-      - Green
+  pull_request:
+    types: [opened, reopened, closed]
 
 permissions:
-  contents: write  # 👈 Esto le da permiso al bot para hacer push
+  contents: write
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
 
+    if: |
+      (github.event.action == 'opened' || github.event.action == 'reopened') && github.event.pull_request.base.ref == 'develop'
+      || (github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master')
+
     steps:
-      - name: Checkout code
+      - name: Checkout base branch
         uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0  # NECESARIO para permitir push
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 20
 
-      - name: Bump patch version
+      - name: Set bump type
+        id: bump
+        run: |
+          if [[ "${{ github.event.pull_request.base.ref }}" == "develop" ]]; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+          else
+            echo "type=major" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch --no-git-tag-version
-          git add package.json package-lock.json
-          git commit -m "ci: bump patch version [skip ci]"
-          git push
+          npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
+          VERSION=$(node -p "require('./package.json').version")
+          git add package.json
+          [ -f package-lock.json ] && git add package-lock.json
+          git commit -m "ci: bump ${{ steps.bump.outputs.type }} version to v$VERSION [skip ci]" || echo "No changes to commit"
+          git pull origin ${{ github.event.pull_request.base.ref }} --rebase
+          git push origin ${{ github.event.pull_request.base.ref }}
