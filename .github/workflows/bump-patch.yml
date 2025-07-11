@@ -1,16 +1,16 @@
-name: Bump patch version
+name: Bump version on PR merge
 
 on:
-  push:
-    branches:
-      - Develop
-      - Green
+  pull_request:
+    types:
+      - closed
 
 permissions:
-  contents: write  # 👈 Esto le da permiso al bot para hacer push
+  contents: write
 
 jobs:
   bump-version:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
@@ -22,11 +22,22 @@ jobs:
         with:
           node-version: 20
 
-      - name: Bump patch version
+      - name: Determine bump type
+        id: version
+        run: |
+          if [[ "${{ github.event.pull_request.base.ref }}" == "master" ]]; then
+            echo "bump=major" >> $GITHUB_OUTPUT
+          else
+            echo "bump=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump ${{ steps.version.outputs.bump }} version
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch --no-git-tag-version
-          git add package.json package-lock.json
-          git commit -m "ci: bump patch version [skip ci]"
+
+          npm version ${{ steps.version.outputs.bump }} --no-git-tag-version
+          git add package.json
+          [ -f package-lock.json ] && git add package-lock.json
+          git commit -m "ci: bump ${{ steps.version.outputs.bump }} version to $(node -p \"require('./package.json').version\") [skip ci]"
           git push
