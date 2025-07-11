@@ -2,7 +2,7 @@ name: Auto Bump Version
 
 on:
   pull_request:
-    types: [opened, closed]
+    types: [opened, reopened, closed]
 
 permissions:
   contents: write
@@ -16,8 +16,11 @@ jobs:
       || (github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master')
 
     steps:
-      - name: Checkout code
+      - name: Checkout base branch
         uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0  # NECESARIO para permitir push
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
@@ -33,7 +36,7 @@ jobs:
             echo "type=major" >> $GITHUB_OUTPUT
           fi
 
-      - name: Bump version ${{ steps.bump.outputs.type }}
+      - name: Bump version and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -41,5 +44,6 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           git add package.json
           [ -f package-lock.json ] && git add package-lock.json
-          git commit -m "ci: bump ${{ steps.bump.outputs.type }} version to v$VERSION [skip ci]"
-          git push origin HEAD:${{ github.event.pull_request.base.ref }}
+          git commit -m "ci: bump ${{ steps.bump.outputs.type }} version to v$VERSION [skip ci]" || echo "No changes to commit"
+          git pull origin ${{ github.event.pull_request.base.ref }} --rebase
+          git push origin ${{ github.event.pull_request.base.ref }}
