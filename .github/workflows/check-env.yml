@@ -1,0 +1,40 @@
+name: Check .env keys coherence
+
+on:
+  pull_request:
+    paths:
+      - '.env*'
+
+jobs:
+  env-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Run .env key comparison
+        id: check-env
+        run: |
+          npm install
+          node scripts/check-env.js
+        continue-on-error: true
+
+      - name: Read env-check result
+        id: env_result
+        run: |
+          echo "ENV_RESULT<<EOF" >> $GITHUB_ENV
+          cat env-check-result.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Comment missing variables in PR
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = process.env.ENV_RESULT;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
