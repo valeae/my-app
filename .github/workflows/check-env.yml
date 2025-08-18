@@ -2,8 +2,6 @@ name: Check .env variables consistency
 
 on:
   pull_request:
-    paths:
-      - ".env*"
     types: [opened, synchronize, reopened]
 
 jobs:
