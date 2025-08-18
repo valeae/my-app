@@ -80,12 +80,17 @@ jobs:
             echo "EOF" >> $GITHUB_ENV
             
             echo "has_missing=true" >> $GITHUB_OUTPUT
+            
+            # FALLAR el workflow cuando hay variables faltantes
+            echo "❌ Se encontraron variables de entorno faltantes. El check debe fallar."
+            exit 1
           else
             echo "has_missing=false" >> $GITHUB_OUTPUT
+            echo "✅ Todas las variables de entorno están sincronizadas."
           fi
 
       - name: Comment missing variables in PR
-        if: steps.env_check.outputs.has_missing == 'true'
+        if: always() && steps.env_check.outputs.has_missing == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -122,7 +127,7 @@ jobs:
             }
 
       - name: Remove old comment if no missing variables
-        if: steps.env_check.outputs.has_missing == 'false'
+        if: always() && steps.env_check.outputs.has_missing == 'false'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
