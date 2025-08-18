@@ -2,9 +2,8 @@ name: Check .env keys coherence
 
 on:
   pull_request:
-    paths:
-      - '.env*'
     types: [opened, synchronize, reopened]
+  workflow_dispatch: # Permite ejecutar manualmente desde GitHub UI
 
 jobs:
   env-check:
@@ -21,23 +20,30 @@ jobs:
         run: |
           # Buscar todos los archivos .env*
           ENV_FILES=($(find . -maxdepth 1 -name '.env*' -type f | sort))
-          
-          if [ ${#ENV_FILES[@]} -lt 2 ]; then
-            echo "result=ℹ️ Solo se encontró ${#ENV_FILES[@]} archivo(s) .env. Se necesitan al menos 2 para comparar." >> $GITHUB_OUTPUT
+
+          if [ ${#ENV_FILES[@]} -eq 0 ]; then
+            echo "result=ℹ️ No se encontraron archivos .env en el proyecto." >> $GITHUB_OUTPUT
+            echo "has_missing=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
+          if [ ${#ENV_FILES[@]} -lt 2 ]; then
+            echo "result=ℹ️ Solo se encontró ${#ENV_FILES[@]} archivo(s) .env. Se necesitan al menos 2 para comparar." >> $GITHUB_OUTPUT
+            echo "has_missing=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           # Obtener todas las variables únicas
           > all_vars.txt
           for file in "${ENV_FILES[@]}"; do
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 >> all_vars.txt
           done
           sort -u all_vars.txt > unique_vars.txt
-          
+
           # Crear reporte
           REPORT=""
           HAS_MISSING=false
-          
+
           for file in "${ENV_FILES[@]}"; do
             # Extraer variables del archivo actual
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 | sort > current_vars.txt
@@ -56,7 +62,7 @@ jobs:
               HAS_MISSING=true
             fi
           done
-          
+
           if [ "$HAS_MISSING" = true ]; then
             # Crear reporte final
             FINAL_REPORT="## 🔍 Variables de Entorno - Faltan Variables\n\n"
@@ -85,19 +91,19 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const body = process.env.ENV_RESULT || "❌ No se pudo generar el reporte.";
-            
+
             // Buscar comentarios previos
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-            
+
             const botComment = comments.find(comment => 
               comment.user.type === 'Bot' && 
               comment.body.includes('🔍 Variables de Entorno')
             );
-            
+
             // Actualizar o crear comentario
             if (botComment) {
               await github.rest.issues.updateComment({
@@ -126,12 +132,12 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-            
+
             const botComment = comments.find(comment => 
               comment.user.type === 'Bot' && 
               comment.body.includes('🔍 Variables de Entorno')
             );
-            
+
             if (botComment) {
               await github.rest.issues.deleteComment({
                 owner: context.repo.owner,
