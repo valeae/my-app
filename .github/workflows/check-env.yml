@@ -116,7 +116,7 @@ jobs:
               });
             }
 
-      - name: Remove env-check comment (no missing now)
+            - name: Remove env-check comment (no missing now)
         if: ${{ always() && steps.env_check.outputs.has_missing == 'false' }}
         uses: actions/github-script@v7
         with:
@@ -129,9 +129,7 @@ jobs:
               issue_number: context.issue.number,
             });
 
-            const existing = comments.find(c =>
-              c.user?.login === 'github-actions[bot]' && c.body?.includes(marker)
-            );
+            const existing = comments.find(c => c.body?.includes(marker));
 
             if (existing) {
               await github.rest.issues.deleteComment({
@@ -139,4 +137,7 @@ jobs:
                 repo: context.repo.repo,
                 comment_id: existing.id
               });
+              core.info("🗑️ Comentario eliminado porque ya no faltan variables.");
+            } else {
+              core.info("ℹ️ No se encontró comentario previo para eliminar.");
             }
