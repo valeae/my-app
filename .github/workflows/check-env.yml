@@ -2,9 +2,6 @@ name: Check .env keys coherence
 
 on:
   pull_request:
-    # Si quieres que corra SIEMPRE en cualquier PR, borra estas dos líneas:
-    paths:
-      - ".env*"
     types: [opened, synchronize, reopened]
 
 jobs:
@@ -22,8 +19,8 @@ jobs:
         id: env_check
         shell: bash
         run: |
-          # Buscar todos los .env en la raíz
-          mapfile -t ENV_FILES < <(find . -maxdepth 1 -type f -name '.env*' | sort)
+          # Buscar todos los .env en cualquier carpeta, incluyendo .env.example
+          mapfile -t ENV_FILES < <(find . -type f -name '.env*' | sort)
 
           if [ ${#ENV_FILES[@]} -lt 2 ]; then
             MSG="ℹ️ Solo se encontró ${#ENV_FILES[@]} archivo(s) .env. Se necesitan al menos 2 para comparar."
@@ -34,10 +31,9 @@ jobs:
             exit 0
           fi
 
-          # Construir universo de keys
+          # Construir universo de keys (todas las claves de todos los .env, incluido .env.example)
           : > all_vars.txt
           for file in "${ENV_FILES[@]}"; do
-            # Toma solo líneas KEY=VAL que comiencen la línea (sin comentarios)
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 >> all_vars.txt || true
           done
           sort -u all_vars.txt > unique_vars.txt
@@ -46,13 +42,11 @@ jobs:
           HAS_MISSING=false
 
           for file in "${ENV_FILES[@]}"; do
-            # Keys presentes en el archivo
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 | sort > current_vars.txt || true
-            # Lo que falta en este archivo respecto al universo
             missing=$(comm -23 unique_vars.txt current_vars.txt || true)
 
             if [ -n "$missing" ]; then
-              REPORT+="### 🚨 Variables faltantes en \`$(basename "$file")\`:\n"
+              REPORT+="### 🚨 Variables faltantes en \`$file\`:\n"
               while IFS= read -r var; do
                 [ -n "$var" ] && REPORT+="- \`$var\`\n"
               done <<< "$missing"
@@ -65,25 +59,20 @@ jobs:
             FINAL="## 🔍 Variables de Entorno - Faltan Variables\n\n"
             FINAL+="### 📋 Archivos analizados:\n"
             for file in "${ENV_FILES[@]}"; do
-              # grep -c devuelve 1 si no hay match; neutralizamos para no cortar el script
               count=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$file" 2>/dev/null || echo 0)
-              FINAL+="- \`$(basename "$file")\` (${count} variables)\n"
+              FINAL+="- \`$file\` (${count} variables)\n"
             done
             FINAL+="\n${REPORT}---\n"
             FINAL+="💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env.\n"
 
-            # Guardar para usarlo en los pasos de comentario
             echo "ENV_RESULT<<EOF" >> "$GITHUB_ENV"
-            # Marcador oculto para identificar/actualizar/eliminar el comentario
             echo "<!-- env-check-report -->" >> "$GITHUB_ENV"
             echo -e "$FINAL" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
 
             echo "has_missing=true" >> "$GITHUB_OUTPUT"
-            # 🔴 Falla el job para que el check quede en rojo
             exit 1
           else
-            # Mensaje OK (también con marcador, útil si quieres mostrar éxito)
             OKMSG="<!-- env-check-report -->\n✅ Todos los archivos .env tienen las mismas keys."
             echo "ENV_RESULT<<EOF" >> "$GITHUB_ENV"
             echo -e "$OKMSG" >> "$GITHUB_ENV"
@@ -92,7 +81,6 @@ jobs:
             exit 0
           fi
 
-      # Publicar/actualizar comentario cuando HAY faltantes
       - name: Comment missing variables in PR
         if: ${{ always() && steps.env_check.outputs.has_missing == 'true' }}
         uses: actions/github-script@v7
@@ -102,7 +90,6 @@ jobs:
             const marker = '<!-- env-check-report -->';
             const body = process.env.ENV_RESULT || `${marker}\n❌ No se pudo generar el reporte.`;
 
-            // Buscar comentario anterior del bot con el marcador
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -129,7 +116,6 @@ jobs:
               });
             }
 
-      # Eliminar comentario cuando YA NO hay faltantes
       - name: Remove env-check comment (no missing now)
         if: ${{ always() && steps.env_check.outputs.has_missing == 'false' }}
         uses: actions/github-script@v7
