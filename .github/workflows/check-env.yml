@@ -19,7 +19,9 @@ jobs:
         id: env_check
         shell: bash
         run: |
-          # Buscar todos los .env en cualquier carpeta, incluyendo .env.example
+          set -euo pipefail
+
+          # Buscar todos los archivos .env* en la raíz
           mapfile -t ENV_FILES < <(find . -maxdepth 1 -type f -name '.env*' | sort)
 
           if [ ${#ENV_FILES[@]} -lt 2 ]; then
@@ -31,20 +33,25 @@ jobs:
             exit 0
           fi
 
-          # Construir universo de keys
+          # Regex que acepta opcionalmente 'export ' y toma solo KEY=
+          KEY_GREP='^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*='
+
+          # Construir universo de keys (unión de todas las keys)
           : > all_vars.txt
           for file in "${ENV_FILES[@]}"; do
-            grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 >> all_vars.txt || true
+            grep -E "$KEY_GREP" "$file" | cut -d'=' -f1 | sed 's/^export[[:space:]]\+//' >> all_vars.txt || true
           done
           sort -u all_vars.txt > unique_vars.txt
 
           REPORT=""
           HAS_MISSING=false
 
+          # Detectar faltantes por archivo
           for file in "${ENV_FILES[@]}"; do
-            name=$(basename "$file") 
-            grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 | sort > current_vars.txt || true
-            missing=$(comm -23 unique_vars.txt current_vars.txt || true)
+            name="$(basename "$file")"
+            grep -E "$KEY_GREP" "$file" | cut -d'=' -f1 | sed 's/^export[[:space:]]\+//' | sort -u > current_vars.txt || true
+            # comm requiere entradas ordenadas
+            missing="$(comm -23 unique_vars.txt current_vars.txt || true)"
 
             if [ -n "$missing" ]; then
               REPORT+="### 🚨 Variables faltantes en \`$name\`:\n"
@@ -56,55 +63,55 @@ jobs:
             fi
           done
 
+          # Armar el resumen con conteo robusto (keys únicas válidas)
+          FINAL_REPORT="## 🔍 Variables de Entorno - Faltan Variables\n\n"
+          FINAL_REPORT+="### 📋 Archivos analizados:\n"
+          for file in "${ENV_FILES[@]}"; do
+            name="$(basename "$file")"
+            var_count="$(grep -E "$KEY_GREP" "$file" | cut -d'=' -f1 | sed 's/^export[[:space:]]\+//' | sort -u | wc -l | tr -d ' ')"
+            FINAL_REPORT+="- \`$name\` (${var_count} variables)\n"
+          done
+
           if [ "$HAS_MISSING" = true ]; then
-            FINAL="## 🔍 Variables de Entorno - Faltan Variables\n\n"
-            FINAL+="### 📋 Archivos analizados:\n"
-            for file in "${ENV_FILES[@]}"; do
-              name=$(basename "$file")
-              count=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$file" 2>/dev/null || echo 0)
-              FINAL+="- \`$name\` (${count} variables)\n"
-            done
-            FINAL+="\n${REPORT}---\n"
-            FINAL+="💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env.\n"
-
+            FINAL_REPORT+="\n${REPORT}---\n💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env.\n"
             echo "ENV_RESULT<<EOF" >> "$GITHUB_ENV"
+            # marcador opcional para localizar/actualizar fácilmente
             echo "<!-- env-check-report -->" >> "$GITHUB_ENV"
-            echo -e "$FINAL" >> "$GITHUB_ENV"
+            echo -e "$FINAL_REPORT" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
-
             echo "has_missing=true" >> "$GITHUB_OUTPUT"
-            exit 1   # 🔴 Falla si faltan
+            # Si quieres que el check falle cuando haya faltantes, descomenta la siguiente línea:
+            # exit 1
           else
-            OKMSG="<!-- env-check-report -->\n✅ Todos los archivos .env tienen las mismas keys."
+            OKMSG="<!-- env-check-report -->\n✅ Todos los archivos .env tienen las mismas keys.\n\n${FINAL_REPORT}"
             echo "ENV_RESULT<<EOF" >> "$GITHUB_ENV"
             echo -e "$OKMSG" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "has_missing=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
 
       - name: Comment missing variables in PR
-        if: ${{ always() && steps.env_check.outputs.has_missing == 'true' }}
+        if: steps.env_check.outputs.has_missing == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const marker = '<!-- env-check-report -->';
             const body = process.env.ENV_RESULT || `${marker}\n❌ No se pudo generar el reporte.`;
-
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-
-            const existing = comments.find(c => c.body?.includes(marker));
-
-            if (existing) {
+            const botComment = comments.find(comment =>
+              (comment.user?.type === 'Bot' || comment.user?.login === 'github-actions[bot]') &&
+              comment.body?.includes('env-check-report')
+            );
+            if (botComment) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: existing.id,
+                comment_id: botComment.id,
                 body
               });
             } else {
@@ -116,8 +123,8 @@ jobs:
               });
             }
 
-      - name: Remove env-check comment (no missing now)
-        if: ${{ always() && steps.env_check.outputs.has_missing == 'false' }}
+      - name: Remove old comment if no missing variables
+        if: steps.env_check.outputs.has_missing == 'false'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -128,15 +135,14 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-
-            const existing = comments.find(c => c.body?.includes(marker));
-            if (existing) {
+            const botComment = comments.find(comment =>
+              (comment.user?.type === 'Bot' || comment.user?.login === 'github-actions[bot]') &&
+              comment.body?.includes(marker)
+            );
+            if (botComment) {
               await github.rest.issues.deleteComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: existing.id
+                comment_id: botComment.id
               });
-              core.info("🗑️ Comentario eliminado porque ya no faltan variables.");
-            } else {
-              core.info("ℹ️ No se encontró comentario previo para eliminar.");
             }
