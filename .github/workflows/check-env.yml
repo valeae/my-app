@@ -1,46 +1,187 @@
-name: Check .env keys coherence
+name: Check .env variables consistency
 
 on:
   pull_request:
     paths:
-      - '.env*'
+      - ".env*"
+    types: [opened, synchronize, reopened]
 
 jobs:
-  env-check:
+  env-validation:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: read
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Run .env key comparison
+      - name: Find all .env files
+        id: find_files
         run: |
-          npm install
-          node scripts/check-env.js || true
+          # Buscar todos los archivos .env* (excluyendo directorios)
+          ENV_FILES=$(find . -maxdepth 1 -name '.env*' -type f | sort)
+          echo "Found .env files:"
+          echo "$ENV_FILES"
+          echo "env_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$ENV_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Read env-check result
-        id: env_result
+      - name: Extract and compare environment variables
+        id: compare_vars
         run: |
-          if [ -f env-check-result.txt ]; then
-            echo "ENV_RESULT<<EOF" >> $GITHUB_ENV
-            cat env-check-result.txt >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-          else
-            echo "ENV_RESULT=✅ Todos los archivos .env tienen las mismas variables." >> $GITHUB_ENV
+          # Crear directorio temporal para los resultados
+          mkdir -p /tmp/env-check
+
+          # Leer archivos .env encontrados
+          ENV_FILES="${{ steps.find_files.outputs.env_files }}"
+
+          if [ -z "$ENV_FILES" ]; then
+            echo "❌ No se encontraron archivos .env en el proyecto"
+            echo "result=❌ No se encontraron archivos .env en el proyecto" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-      - name: Comment missing variables in PR
-        if: always() 
+          # Array para almacenar archivos válidos
+          declare -a VALID_FILES
+
+          # Extraer variables de cada archivo
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              echo "📄 Procesando: $file"
+              # Extraer solo las keys (nombre de variables antes del =)
+              grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 | sort > "/tmp/env-check/$(basename $file).keys"
+              VALID_FILES+=("$file")
+            fi
+          done <<< "$ENV_FILES"
+
+          if [ ${#VALID_FILES[@]} -lt 2 ]; then
+            echo "result=ℹ️ Solo se encontró un archivo .env. Se necesitan al menos 2 archivos para comparar." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Obtener todas las variables únicas de todos los archivos
+          cat /tmp/env-check/*.keys | sort -u > /tmp/env-check/all_vars.txt
+
+          # Crear reporte de variables faltantes
+          REPORT_FILE="/tmp/env-check/missing_report.txt"
+          > "$REPORT_FILE"
+
+          HAS_MISSING=false
+
+          # Para cada archivo, verificar qué variables le faltan
+          for file in "${VALID_FILES[@]}"; do
+            file_keys="/tmp/env-check/$(basename $file).keys"
+            missing_vars=$(comm -23 /tmp/env-check/all_vars.txt "$file_keys")
+            
+            if [ ! -z "$missing_vars" ]; then
+              echo "### 🚨 Variables faltantes en \`$(basename $file)\`:" >> "$REPORT_FILE"
+              while IFS= read -r var; do
+                if [ ! -z "$var" ]; then
+                  echo "- \`$var\`" >> "$REPORT_FILE"
+                fi
+              done <<< "$missing_vars"
+              echo "" >> "$REPORT_FILE"
+              HAS_MISSING=true
+            fi
+          done
+
+          # Crear resumen de archivos procesados
+          echo "### 📋 Archivos analizados:" >> "/tmp/env-check/summary.txt"
+          for file in "${VALID_FILES[@]}"; do
+            var_count=$(wc -l < "/tmp/env-check/$(basename $file).keys")
+            echo "- \`$(basename $file)\` (${var_count} variables)" >> "/tmp/env-check/summary.txt"
+          done
+          echo "" >> "/tmp/env-check/summary.txt"
+
+          # Combinar reporte final
+          FINAL_REPORT="/tmp/env-check/final_report.txt"
+          if [ "$HAS_MISSING" = true ]; then
+            echo "## 🔍 Validación de Variables de Entorno - Variables Faltantes" > "$FINAL_REPORT"
+            echo "" >> "$FINAL_REPORT"
+            cat "/tmp/env-check/summary.txt" >> "$FINAL_REPORT"
+            cat "$REPORT_FILE" >> "$FINAL_REPORT"
+            echo "---" >> "$FINAL_REPORT"
+            echo "💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env para mantener consistencia." >> "$FINAL_REPORT"
+          fi
+
+          # Guardar resultado para el siguiente step
+          echo "has_missing=$HAS_MISSING" >> $GITHUB_OUTPUT
+          echo "report_file=$FINAL_REPORT" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        if: steps.compare_vars.outputs.has_missing == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body = process.env.ENV_RESULT || "❌ No se pudo leer el resultado.";
-            await github.rest.issues.createComment({
+            const fs = require('fs');
+            const reportFile = '${{ steps.compare_vars.outputs.report_file }}';
+
+            let body;
+            try {
+              if (fs.existsSync(reportFile)) {
+                body = fs.readFileSync(reportFile, 'utf8');
+              } else {
+                body = "❌ Error al generar el reporte de validación de variables .env";
+              }
+            } catch (error) {
+              body = "❌ Error al leer el reporte: " + error.message;
+            }
+
+            // Buscar comentarios previos de este action solo si hay variables faltantes
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body
             });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('🔍 Validación de Variables de Entorno')
+            );
+
+            // Si existe un comentario previo, actualizarlo; si no, crear uno nuevo
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            }
+
+      - name: Remove old comments if no missing variables
+        if: steps.compare_vars.outputs.has_missing == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Buscar y eliminar comentarios previos si ya no hay variables faltantes
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('🔍 Validación de Variables de Entorno')
+            );
+
+            if (botComment) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id
+              });
+              console.log('✅ Comentario anterior eliminado - ya no hay variables faltantes');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
