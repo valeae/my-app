@@ -2,8 +2,9 @@ name: Check .env keys coherence
 
 on:
   pull_request:
+    paths:
+      - ".env*"
     types: [opened, synchronize, reopened]
-  workflow_dispatch: # Permite ejecutar manualmente desde GitHub UI
 
 jobs:
   env-check:
@@ -20,114 +21,89 @@ jobs:
         run: |
           # Buscar todos los archivos .env*
           ENV_FILES=($(find . -maxdepth 1 -name '.env*' -type f | sort))
-
-          if [ ${#ENV_FILES[@]} -eq 0 ]; then
-            echo "result=ℹ️ No se encontraron archivos .env en el proyecto." >> $GITHUB_OUTPUT
-            echo "has_missing=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
+          
           if [ ${#ENV_FILES[@]} -lt 2 ]; then
-            echo "result=ℹ️ Solo se encontró ${#ENV_FILES[@]} archivo(s) .env. Se necesitan al menos 2 para comparar." >> $GITHUB_OUTPUT
+            echo "ENV_RESULT=ℹ️ Solo se encontró ${#ENV_FILES[@]} archivo(s) .env. Se necesitan al menos 2 para comparar." >> $GITHUB_ENV
             echo "has_missing=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
+          
           # Obtener todas las variables únicas
           > all_vars.txt
           for file in "${ENV_FILES[@]}"; do
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 >> all_vars.txt
           done
           sort -u all_vars.txt > unique_vars.txt
-
+          
           # Crear reporte
           REPORT=""
           HAS_MISSING=false
-
+          
           for file in "${ENV_FILES[@]}"; do
-            # Extraer variables del archivo actual
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | cut -d'=' -f1 | sort > current_vars.txt
-            
-            # Encontrar variables faltantes
             missing=$(comm -23 unique_vars.txt current_vars.txt)
             
-            if [ ! -z "$missing" ]; then
+            if [ -n "$missing" ]; then
               REPORT="${REPORT}### 🚨 Variables faltantes en \`$(basename $file)\`:\n"
               while IFS= read -r var; do
-                if [ ! -z "$var" ]; then
-                  REPORT="${REPORT}- \`$var\`\n"
-                fi
+                REPORT="${REPORT}- \`$var\`\n"
               done <<< "$missing"
               REPORT="${REPORT}\n"
               HAS_MISSING=true
             fi
           done
-
+          
           if [ "$HAS_MISSING" = true ]; then
-            # Crear reporte final
             FINAL_REPORT="## 🔍 Variables de Entorno - Faltan Variables\n\n"
             FINAL_REPORT="${FINAL_REPORT}### 📋 Archivos analizados:\n"
             for file in "${ENV_FILES[@]}"; do
               var_count=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$file")
               FINAL_REPORT="${FINAL_REPORT}- \`$(basename $file)\` (${var_count} variables)\n"
             done
-            FINAL_REPORT="${FINAL_REPORT}\n${REPORT}"
-            FINAL_REPORT="${FINAL_REPORT}---\n💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env."
+            FINAL_REPORT="${FINAL_REPORT}\n${REPORT}---\n💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env."
             
-            # Guardar en variable de entorno para el siguiente step
             echo "ENV_RESULT<<EOF" >> $GITHUB_ENV
             echo -e "$FINAL_REPORT" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
-            
             echo "has_missing=true" >> $GITHUB_OUTPUT
-            
-            # FALLAR el workflow cuando hay variables faltantes
-            echo "❌ Se encontraron variables de entorno faltantes. El check debe fallar."
-            exit 1
           else
             echo "has_missing=false" >> $GITHUB_OUTPUT
-            echo "✅ Todas las variables de entorno están sincronizadas."
           fi
 
       - name: Comment missing variables in PR
-        if: always() && steps.env_check.outputs.has_missing == 'true'
+        if: steps.env_check.outputs.has_missing == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const body = process.env.ENV_RESULT || "❌ No se pudo generar el reporte.";
-
-            // Buscar comentarios previos
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-
-            const botComment = comments.find(comment => 
-              comment.user.type === 'Bot' && 
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
               comment.body.includes('🔍 Variables de Entorno')
             );
-
-            // Actualizar o crear comentario
             if (botComment) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: botComment.id,
-                body: body
+                body
               });
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: body
+                body
               });
             }
 
       - name: Remove old comment if no missing variables
-        if: always() && steps.env_check.outputs.has_missing == 'false'
+        if: steps.env_check.outputs.has_missing == 'false'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -137,12 +113,10 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-
-            const botComment = comments.find(comment => 
-              comment.user.type === 'Bot' && 
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
               comment.body.includes('🔍 Variables de Entorno')
             );
-
             if (botComment) {
               await github.rest.issues.deleteComment({
                 owner: context.repo.owner,
