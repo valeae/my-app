@@ -62,7 +62,7 @@ jobs:
             for file in "${ENV_FILES[@]}"; do
               name=$(basename "$file")
               count=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$file" 2>/dev/null || echo 0)
-              FINAL+="- \`$file\` (${count} variables)\n"
+              FINAL+="- \`$name\` (${count} variables)\n"
             done
             FINAL+="\n${REPORT}---\n"
             FINAL+="💡 **Sugerencia**: Asegúrate de que todas las variables estén presentes en todos los archivos .env.\n"
