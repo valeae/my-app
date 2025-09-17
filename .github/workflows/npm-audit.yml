@@ -1,0 +1,143 @@
+name: Packages Security Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      GITHUB_OAUTH_TOKEN: ${{ secrets.OAUTH_GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create .npmrc for GitHub Packages
+        run: |
+          echo "@epayco:registry=https://npm.pkg.github.com/" > .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${GITHUB_OAUTH_TOKEN}" >> .npmrc
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20.x"
+
+      - name: Install dependencies with Yarn
+        run: yarn install --frozen-lockfile
+
+      - name: Run Yarn Audit
+        run: yarn audit --json > audit-results.json || true
+
+      - name: Parse audit and generate markdown report
+        id: summary
+        run: |
+          echo "### 🛡️ Yarn Audit Summary" > audit-summary.md
+
+          critical=0
+          high=0
+          moderate=0
+          low=0
+
+          critical=$(jq -r 'select(.type == "auditAdvisory") | .data.advisory.severity' audit-results.json | grep -c 'critical' || true)
+          high=$(jq -r 'select(.type == "auditAdvisory") | .data.advisory.severity' audit-results.json | grep -c 'high' || true)
+          moderate=$(jq -r 'select(.type == "auditAdvisory") | .data.advisory.severity' audit-results.json | grep -c 'moderate' || true)
+          low=$(jq -r 'select(.type == "auditAdvisory") | .data.advisory.severity' audit-results.json | grep -c 'low' || true)
+
+          echo "- **Critical**: $critical" >> audit-summary.md
+          echo "- **High**: $high" >> audit-summary.md
+          echo "- **Moderate**: $moderate" >> audit-summary.md
+          echo "- **Low**: $low" >> audit-summary.md
+
+          echo "" >> audit-summary.md
+          echo "### 🔍 Vulnerabilidades encontradas" >> audit-summary.md
+          echo "" >> audit-summary.md
+          echo "| Paquete | Severidad | Vía | Recomendación | Advisory |" >> audit-summary.md
+          echo "|---------|-----------|-----|----------------|----------|" >> audit-summary.md
+
+          jq -r '
+            select(.type == "auditAdvisory") 
+            | [.data.advisory.module_name, .data.advisory.severity, (.data.advisory.findings[0].paths[0] // "N/A"), (.data.advisory.recommendation // "N/A"), (.data.advisory.url // "N/A")]
+            | @tsv
+            ' audit-results.json | while IFS=$'\t' read -r name severity path recommendation url; do
+            echo "| \`$name\` | $severity | \`$path\` | $recommendation | [Link]($url) |" >> audit-summary.md
+          done
+
+          echo "" >> audit-summary.md
+          echo "🧪 Ejecuta \`yarn audit\` localmente para más detalles." >> audit-summary.md
+
+          echo "critical=$critical" >> $GITHUB_OUTPUT
+          echo "high=$high" >> $GITHUB_OUTPUT
+          echo "moderate=$moderate" >> $GITHUB_OUTPUT
+          echo "low=$low" >> $GITHUB_OUTPUT
+
+      - name: Ensure badge directory exists
+        run: mkdir -p .github/badges
+
+      - name: Badge - Critical
+        uses: emibcn/badge-action@v2
+        with:
+          label: Críticas
+          status: ${{ steps.summary.outputs.critical }}
+          color: red
+          path: .github/badges/security-critical.svg
+
+      - name: Badge - High
+        uses: emibcn/badge-action@v2
+        with:
+          label: Altas
+          status: ${{ steps.summary.outputs.high }}
+          color: orange
+          path: .github/badges/security-high.svg
+
+      - name: Badge - Moderate
+        uses: emibcn/badge-action@v2
+        with:
+          label: Moderadas
+          status: ${{ steps.summary.outputs.moderate }}
+          color: yellow
+          path: .github/badges/security-moderate.svg
+
+      - name: Badge - Low
+        uses: emibcn/badge-action@v2
+        with:
+          label: Bajas
+          status: ${{ steps.summary.outputs.low }}
+          color: green
+          path: .github/badges/security-low.svg
+
+      - name: Update README.md with security badges
+        run: |
+          start_marker="<!-- security-badges:start -->"
+          end_marker="<!-- security-badges:end -->"
+
+          badges="[![Críticas](.github/badges/security-critical.svg)](audit-summary.md) [![Altas](.github/badges/security-high.svg)](audit-summary.md) [![Moderadas](.github/badges/security-moderate.svg)](audit-summary.md) [![Bajas](.github/badges/security-low.svg)](audit-summary.md)"
+
+          if ! grep -q "$start_marker" README.md; then
+            echo -e "\n$start_marker\n$badges\n$end_marker" >> README.md
+          else
+            sed -i "/$start_marker/,/$end_marker/c\\$start_marker\n$badges\n$end_marker" README.md
+          fi
+
+      - name: Check for changes
+        id: git_diff
+        run: |
+          git diff --exit-code || echo "changes=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push changes if any
+        if: steps.git_diff.outputs.changes == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update security badges in README"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment audit summary on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: audit-summary.md
