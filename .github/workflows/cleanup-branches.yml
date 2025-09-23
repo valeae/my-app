@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # ⬅️ necesario para borrar ramas
+  contents: write
 
 jobs:
   cleanup:
@@ -23,7 +23,7 @@ jobs:
           CUTOFF=$(date -d "14 days ago" +%s)
 
           echo "🔍 Revisando ramas mergeadas en master..."
-          for branch in $(git branch -r --merged origin/master | sed 's|origin/||'); do
+          for branch in $(git branch -r --merged origin/master | grep -v 'HEAD ->' | sed 's|origin/||'); do
             # excluir ramas protegidas
             if [[ "$branch" =~ ^(master|develop|green|HEAD)$ ]]; then
               echo "⏩ Saltando rama protegida: $branch"
