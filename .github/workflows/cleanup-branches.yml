@@ -3,7 +3,10 @@ name: Cleanup Merged Branches
 on:
   schedule:
     - cron: "0 0 1,15 * *"
-  workflow_dispatch: 
+  workflow_dispatch:
+
+permissions:
+  contents: write   # ⬅️ necesario para borrar ramas
 
 jobs:
   cleanup:
