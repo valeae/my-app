@@ -1,0 +1,38 @@
+name: Cleanup Merged Branches
+
+on:
+  schedule:
+    - cron: "0 0 1,15 * *"
+  workflow_dispatch: 
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Remove merged branches older than 14 days
+        run: |
+          git fetch --prune
+          CUTOFF=$(date -d "14 days ago" +%s)
+
+          echo "🔍 Revisando ramas mergeadas en master..."
+          for branch in $(git branch -r --merged origin/master | sed 's|origin/||'); do
+            # excluir ramas protegidas
+            if [[ "$branch" =~ ^(master|develop|green|HEAD)$ ]]; then
+              echo "⏩ Saltando rama protegida: $branch"
+              continue
+            fi
+
+            # obtener timestamp del último commit
+            LAST_COMMIT=$(git log -1 --format=%ct origin/$branch)
+            if [ "$LAST_COMMIT" -lt "$CUTOFF" ]; then
+              echo "🗑️ Eliminando rama: $branch (último commit: $(date -d @$LAST_COMMIT))"
+              git push origin --delete "$branch"
+            else
+              echo "✅ Manteniendo rama: $branch (último commit: $(date -d @$LAST_COMMIT))"
+            fi
+          done
