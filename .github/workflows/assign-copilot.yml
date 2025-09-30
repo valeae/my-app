@@ -7,6 +7,7 @@ on:
       - master
 
 permissions:
+  contents: read
   pull-requests: write
 
 jobs:
@@ -20,7 +21,7 @@ jobs:
           echo "Branch: ${{ github.event.pull_request.base.ref }}"
           echo "Labels: ${{ toJson(github.event.pull_request.labels) }}"
 
-      - name: Check Conditions (any label + master branch)
+      - name: Check Conditions (labels/branches)
         id: conditions
         uses: actions/github-script@v7
         with:
@@ -29,8 +30,9 @@ jobs:
             const baseBranch = pr.base.ref;
             const labels = pr.labels.map(l => l.name);
 
-            // Condición: si apunta a master y tiene al menos 1 label
-            if (baseBranch === "master" && labels.length > 0) {
+            // Condición: solo en develop o master con label "review-with-copilot"
+            if ((baseBranch === "develop" || baseBranch === "master") &&
+                labels.includes("review-with-copilot")) {
               core.setOutput("shouldAssign", "true");
             } else {
               core.setOutput("shouldAssign", "false");
@@ -59,4 +61,5 @@ jobs:
               core.info(`✅ Copilot asignado como reviewer en PR #${prNumber}`);
             } catch (error) {
               core.warning(`⚠️ No se pudo asignar a Copilot: ${error.message}`);
+              core.setFailed("Error al intentar asignar reviewer.");
             }
