@@ -72,3 +72,5 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/t
 <!-- security-badges:start -->
 [![Críticas](.github/badges/security-critical.svg)](audit-summary.md) [![Altas](.github/badges/security-high.svg)](audit-summary.md) [![Moderadas](.github/badges/security-moderate.svg)](audit-summary.md) [![Bajas](.github/badges/security-low.svg)](audit-summary.md)
 <!-- security-badges:end -->
+
+
